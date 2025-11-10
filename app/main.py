@@ -10,6 +10,22 @@ import numpy as np
 bp = Blueprint("main", __name__)
 
 
+@bp.get("/")
+def index():
+    """Root endpoint - API information"""
+    return jsonify({
+        "name": "Podman CI/CD Deployment API",
+        "version": "1.0.0",
+        "status": "running",
+        "endpoints": {
+            "health": "GET /health - Health check",
+            "db_ping": "GET /db-ping - MySQL connection test",
+            "faiss_search": "POST /faiss/search - FAISS vector search"
+        },
+        "docs": "See README.md for more information"
+    })
+
+
 def get_db_connection():
     return mysql.connector.connect(
         host=os.getenv("MYSQL_HOST", "mysql"),
@@ -66,17 +82,16 @@ def faiss_search():
     )
 
 
-def create_wsgi_app():
-    # For WSGI servers like gunicorn
-    from . import create_app
-
-    return create_app()
-
-
 if __name__ == "__main__":
-    from flask import Flask
-
-    app: Flask = create_wsgi_app()
+    # For development: run directly from this file
+    # In production, use wsgi.py with gunicorn
+    import sys
+    import os
+    # Add parent directory to path for imports
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from app import create_app
+    
+    app = create_app()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
 
 

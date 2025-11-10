@@ -13,9 +13,10 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY wsgi.py ./
 
 ENV PYTHONUNBUFFERED=1 \
-    FLASK_APP=app.main \
+    FLASK_APP=app:create_app \
     MYSQL_HOST=mysql \
     MYSQL_USER=appuser \
     MYSQL_PASSWORD=apppassword \
@@ -24,6 +25,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 5000
 
-CMD ["gunicorn", "app.main:create_wsgi_app()", "-b", "0.0.0.0:5000", "-w", "2"]
+CMD ["gunicorn", "wsgi:app", "-b", "0.0.0.0:5000", "-w", "2", "--timeout", "120"]
 
 
