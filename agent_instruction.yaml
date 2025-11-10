@@ -1,0 +1,43 @@
+agent_instruction:
+  name: "Podman CI/CD Deployment Agent Overview"
+  description: >
+    Hướng dẫn tổng quan cho AI agent triển khai ứng dụng containerized với MySQL và FAISS,
+    tạo thư mục dự án, Dockerfile, podman-compose.yml, và thiết lập workflow CI/CD.
+
+  workflow_overview:
+    - step: "Setup project structure"
+      action:
+        - Tạo thư mục dự án: `app/`, `data/mysql/`, `.github/workflows/`
+        - Chuẩn bị nơi lưu trữ code, dữ liệu MySQL và workflow CI/CD
+
+    - step: "Application container"
+      action:
+        - Tạo Dockerfile cho ứng dụng Python
+        - Cài đặt dependencies: MySQL connector, FAISS, Flask
+        - Copy code vào container
+
+    - step: "Database container"
+      action:
+        - Sử dụng MySQL container
+        - Mount volume để lưu trữ dữ liệu
+        - Thiết lập biến môi trường: user, password, database
+
+    - step: "Podman Compose setup"
+      action:
+        - Tạo `podman-compose.yml` để chạy đồng thời app và MySQL
+        - Liên kết network giữa các service
+        - Optionally mount thư mục app từ host để dev thay đổi code trực tiếp
+
+    - step: "CI/CD integration (GitHub Actions)"
+      action:
+        - Thiết lập workflow CI/CD tự động khi có push code lên repository
+        - Build image từ Dockerfile
+        - Push image lên registry (DockerHub/private)
+        - Deploy/update container trên hệ thống
+        - So sánh cấu hình mới với cấu hình hiện tại để đồng bộ
+
+    - step: "Notes / Best Practices"
+      action:
+        - Dev environment: mount thư mục code trực tiếp, không cần rebuild image liên tục
+        - Production: luôn build image từ Git và deploy container versioned
+        - Kiểm tra quyền truy cập volume, đặc biệt với Windows/Podman Desktop
