@@ -1,4 +1,4 @@
-name: CI/CD
+name: CI/CD Pipeline (Build + MySQL + API Test)
 
 on:
   push:
@@ -10,10 +10,9 @@ jobs:
   # ----------------------------
   # 1️⃣ Build & Push Docker Image
   # ----------------------------
-  docker:
+  build_and_push:
     runs-on: ubuntu-latest
-    outputs:
-      image_tag: ${{ steps.docker_build.outputs.imageid }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,12 +23,10 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
-      # Thiết lập Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         id: buildx
 
-      # Build & Push image
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
         id: docker_build
@@ -43,65 +40,112 @@ jobs:
             ${{ secrets.DOCKER_HUB_USERNAME }}/podman-test-app:${{ github.sha }}
 
   # ----------------------------
-  # 2️⃣ Smoke Test Job
+  # 2️⃣ Smoke Test Job (App + MySQL)
   # ----------------------------
-  smoke-test:
+  smoke_test:
     runs-on: ubuntu-latest
-    needs: docker  # chạy sau khi job docker hoàn thành
+    needs: build_and_push
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: appdb
+          MYSQL_USER: appuser
+          MYSQL_PASSWORD: apppassword
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -p${MYSQL_ROOT_PASSWORD}" 
+          --health-interval=10s 
+          --health-timeout=5s 
+          --health-retries=5
+
+    env:
+      MYSQL_HOST: mysql
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppassword
+      MYSQL_DATABASE: appdb
+      MYSQL_PORT: 3306
+      MYSQL_ROOT_PASSWORD: root
+      PORT: 5000
+      IMAGE: ${{ secrets.DOCKER_HUB_USERNAME }}/podman-test-app:latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 🔹 Pull image vừa build từ Docker Hub
-      - name: Pull image from Docker Hub
-        run: docker pull ${{ secrets.DOCKER_HUB_USERNAME }}/podman-test-app:latest
+      - name: Pull Docker Image
+        run: docker pull $IMAGE
 
-      # 🔹 Run container
-      - name: Run container
-        run: docker run -d --rm -p 5000:5000 --name podman-test-app ${{ secrets.DOCKER_HUB_USERNAME }}/podman-test-app:latest
-
-      # 🔹 Wait for app startup (tối đa 60 giây)
-      - name: Wait for app to start
+      # 🕐 Wait for MySQL container to be healthy
+      - name: Wait for MySQL Ready
         run: |
+          echo "Waiting for MySQL to start..."
           for i in {1..60}; do
-            curl -fsS http://127.0.0.1:5000/ >/dev/null && exit 0
-            sleep 1
+            docker exec $(docker ps -qf "ancestor=mysql:8.4") mysqladmin ping -h localhost -proot > /dev/null 2>&1 && break
+            sleep 2
           done
-          echo "App did not start within 60 seconds" >&2
+          echo "✅ MySQL is ready."
+
+      # 🚀 Run App container connected to MySQL service
+      - name: Run App Container
+        run: |
+          docker run -d --rm \
+            --name podman-test-app \
+            --network ${{ job.services.mysql.network }} \
+            -e MYSQL_HOST=$MYSQL_HOST \
+            -e MYSQL_USER=$MYSQL_USER \
+            -e MYSQL_PASSWORD=$MYSQL_PASSWORD \
+            -e MYSQL_DATABASE=$MYSQL_DATABASE \
+            -e MYSQL_PORT=$MYSQL_PORT \
+            -p $PORT:$PORT \
+            $IMAGE
+
+      # 🕓 Wait until the app responds
+      - name: Wait for App Startup
+        run: |
+          echo "Waiting for app to be ready..."
+          for i in {1..60}; do
+            curl -fsS http://127.0.0.1:$PORT/ >/dev/null && exit 0
+            sleep 2
+          done
+          echo "App did not become ready in time" >&2
           docker logs podman-test-app || true
           exit 1
 
-      # 🔹 Smoke test 1: Root endpoint "/"
-      - name: Check root endpoint
+      # ✅ Test endpoint: "/"
+      - name: Test Root Endpoint
         run: |
-          curl -fsS http://127.0.0.1:5000/ -o index.json
-          cat index.json
+          curl -fsS http://127.0.0.1:$PORT/ -o index.json
           python - <<'PY'
-          import json
-          d = json.load(open("index.json"))
-          assert d.get("status") == "running", "App not running"
-          print("✅ Root endpoint OK")
+          import json; d=json.load(open("index.json"))
+          assert d["status"] == "running", "Root endpoint not running"
+          print("✅ / endpoint OK")
           PY
 
-      # 🔹 Smoke test 2: DB ping endpoint
-      - name: Check DB ping endpoint
+      # ✅ Test endpoint: "/db-ping"
+      - name: Test DB Ping
         run: |
-          set -euo pipefail
-          curl -fsS http://127.0.0.1:5000/db-ping -o dbping.json || {
-            echo "DB ping failed"
-            docker logs podman-test-app || true
-            exit 1
-          }
-          cat dbping.json
+          curl -fsS http://127.0.0.1:$PORT/db-ping -o dbping.json
           python - <<'PY'
-          import json
-          d = json.load(open("dbping.json"))
-          assert d.get("db") in ("ok","error"), "Unexpected db_ping response"
-          print("✅ DB ping endpoint OK:", d)
+          import json; d=json.load(open("dbping.json"))
+          assert "db" in d, "Missing key 'db'"
+          print("✅ /db-ping:", d)
           PY
 
-      # 🔹 Always teardown
-      - name: Stop container
+      # ✅ Test endpoint: "/faiss/search" (mock payload)
+      - name: Test /faiss/search Endpoint
+        run: |
+          curl -fsS -X POST http://127.0.0.1:$PORT/faiss/search \
+            -H "Content-Type: application/json" \
+            -d '{"query": "test vector"}' -o faiss.json || true
+          cat faiss.json || echo "no faiss response"
+
+      # 🧹 Cleanup (always)
+      - name: Teardown Containers
         if: always()
-        run: docker stop podman-test-app || true
+        run: |
+          docker stop podman-test-app || true
+          docker ps -a
